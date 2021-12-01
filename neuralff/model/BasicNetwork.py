@@ -19,5 +19,34 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-from .BasicNetwork import *
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class BasicNetwork(nn.Module):
+    def __init__(self, 
+        input_dim = 2, 
+        output_dim = 2, 
+        activation = torch.sin, 
+        bias = True, 
+        num_layers = 1, 
+        hidden_dim = 128):
+        
+        super().__init__()
+        self.activation = activation
+        layers = []
+        for i in range(num_layers):
+            if i == 0:
+                layers.append(nn.Linear(input_dim, hidden_dim, bias=bias))
+            else: 
+                layers.append(nn.Linear(hidden_dim, hidden_dim, bias=bias))
+        self.layers = nn.ModuleList(layers)
+        self.lout = nn.Linear(hidden_dim, output_dim, bias=bias)
+
+    def forward(self, x):
+        h = x
+        for i, l in enumerate(self.layers):
+            h = self.activation(l(h))
+        out = torch.sigmoid(self.lout(h))
+        return out
 
