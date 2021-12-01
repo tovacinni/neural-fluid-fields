@@ -35,6 +35,8 @@ from glumpy import app, gloo, gl
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
+from neuralff.model import BasicNetwork
+
 @contextmanager
 def cuda_activate(img):
     """Context manager simplifying use of pycuda.gl.RegisteredImage"""
@@ -61,32 +63,6 @@ def normalized_grid(height, width, device="cuda"):
     coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
     return coord
 
-class Network(nn.Module):
-    def __init__(self, 
-        input_dim = 2, 
-        output_dim = 2, 
-        activation = torch.sin, 
-        bias = True, 
-        num_layers = 1, 
-        hidden_dim = 128):
-        
-        super().__init__()
-        self.activation = activation
-        layers = []
-        for i in range(num_layers):
-            if i == 0:
-                layers.append(nn.Linear(input_dim, hidden_dim, bias=bias))
-            else: 
-                layers.append(nn.Linear(hidden_dim, hidden_dim, bias=bias))
-        self.layers = nn.ModuleList(layers)
-        self.lout = nn.Linear(hidden_dim, output_dim, bias=bias)
-
-    def forward(self, x):
-        h = x
-        for i, l in enumerate(self.layers):
-            h = self.activation(l(h))
-        out = torch.sigmoid(self.lout(h))
-        return out
 
 class InteractiveApp(sys.modules[backend].Window):
 
@@ -133,7 +109,7 @@ class InteractiveApp(sys.modules[backend].Window):
     
     def init_state(self):
 
-        self.net = Network()
+        self.net = BasicNetwork()
         self.net = self.net.to('cuda')
         self.net.eval()
 
