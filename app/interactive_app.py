@@ -36,6 +36,7 @@ from glumpy import app, gloo, gl
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from neuralff.model import BasicNetwork
+import neuralff.ops as nff_ops
 
 from scipy import sparse
 import scipy.sparse.linalg as linalg
@@ -53,81 +54,6 @@ def load_rgb(path):
     #img = img.transpose(2, 0, 1)
     img = img.transpose(1, 0, 2)
     return img
-
-def normalized_grid_coords(height, width, aspect=True, device="cuda"):
-    """Return the normalized [-1, 1] grid coordinates given height and width.
-
-    Args:
-        height (int) : height of the grid.
-        width (int) : width of the grid.
-        aspect (bool) : if True, use the aspect ratio to scale the coordinates, in which case the 
-                        coords will not be normalzied to [-1, 1]. (Default: True)
-        device : the device the tensors will be created on.
-    """
-    aspect_ratio = width/height if aspect else 1.0
-
-    window_x = torch.linspace(-1, 1, steps=width, device=device) * aspect_ratio
-    window_y = torch.linspace(1, -1, steps=height, device=device)
-    coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
-    return coord
-
-def sample_from_grid(coords, grid, padding_mode="zeros"):
-    """Sample from a discrete grid at continuous coordinates.
-
-    Args:
-        coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [N, 2]
-        grid (torch.FloatTensor): grid of size [H, W, F].
-    
-    Returns:
-        (torch.FloatTensor): interpolated values of [N, F]
-
-    """
-    N = coords.shape[0]
-    sample_coords = coords.reshape(1, N, 1, 2)
-    samples = F.grid_sample(grid[None].permute(0,3,1,2), sample_coords, align_corners=True,
-                            padding_mode=padding_mode)[0,:,:,0].transpose(0,1)
-    return samples
-
-def semi_lagrangian_backtrace(coords, grid, velocities, timestep):
-    """Perform semi-Lagrangian backtracing at continuous coordinates.
-
-    Warning: PyTorch follows rather stupid conventions, so the flow field is [w, h] but the grid is [h, w]
-
-    Args:
-        coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [N, 2]
-        grid (torch.FloatTensor): grid of features of size [H, W, F]
-        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
-        timestep (float) : timestep of the simulation
-
-    Returns
-        (torch.FloatTensor): backtracked values of [N, F]
-    """
-
-    # Velocities aren't necessarily on the same grid as the coords
-    velocities_at_coords = sample_from_grid(coords, velocities)
-    
-    # Equation 3.22 from Doyub's book
-    samples = sample_from_grid(coords - timestep * velocities_at_coords, grid)
-    return samples
-
-def semi_lagrangian_advection(coords, velocities, grid, timestep):
-    """Performs advection and updates the grid.
-    
-    This method is similar to the `semi_lagrangian_backtrace` function, but assumes the `coords` are 
-    perfectly aligned with the `grid`. 
-
-    Args:
-        coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [H, W, 2]
-        grid (torch.FloatTensor): grid of features of size [H, W, F]
-        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
-        timestep (float) : timestep of the simulation
-
-    Returns
-        (torch.FloatTensor): advaceted grid of [H, W, F]
-    """
-    H, W = coords.shape[:2]
-    samples = semi_lagrangian_backtrace(coords.reshape(-1, 2), grid, velocities, timestep)
-    return samples.reshape(H, W, -1)
 
 @contextmanager
 def cuda_activate(img):
@@ -265,7 +191,7 @@ class InteractiveApp(sys.modules[backend].Window):
         # render with pytorch
         state = torch.zeros(*self.render_res, 4, device='cuda')
 
-        coords = normalized_grid_coords(*self.render_res)
+        coords = nff_ops.normalized_grid_coords(*self.render_res)
 
         state[...,:3] = self.render(coords)
         state[...,3] = 1
@@ -296,10 +222,10 @@ class InteractiveApp(sys.modules[backend].Window):
 
     def init_state(self):
 
-        self.gravity = 1e-6
+        self.gravity = 1e-4
         self.timestep = 1e-1
         
-        self.image_coords = normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
+        self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
         self.image_coords[...,1] *= -1
 
         if self.mode == "stable_fluids":
@@ -335,7 +261,7 @@ class InteractiveApp(sys.modules[backend].Window):
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-            self.rgb = semi_lagrangian_advection(self.image_coords, self.velocities, self.rgb, self.timestep)
+            self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.velocities, self.rgb, self.timestep)
             return self.rgb
 
         elif self.mode == "neuralff":
