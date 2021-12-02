@@ -40,33 +40,38 @@ from neuralff.model import BasicNetwork
 from scipy import sparse
 import scipy.sparse.linalg as linalg
 
+import cv2
+import skimage
+import imageio
 
-class FeatureImage(nn.Module):
-    def __init__(self, fdim, fsize, dim=0):
-        super().__init__()
-        self.fsize = fsize
-        self.fdim = fdim
-        self.fm = nn.Parameter(torch.randn(1, fdim, fsize+1, fsize+1) * 0.01)
-        self.dims = [0,1,2]
-        self.dims.remove(dim)
-        self.padding_mode = 'reflection'
+def load_rgb(path):
+    img = imageio.imread(path)
+    img = skimage.img_as_float32(img)
+    img = img[:,:,:3]
+    #img -= 0.5
+    #img *= 2.
+    #img = img.transpose(2, 0, 1)
+    img = img.transpose(1, 0, 2)
+    return img
 
-    def forward(self, x):
-        N = x.shape[0]
-        
-        # This stuff needs to be fixed... eventually
-        if len(x.shape) == 3:
-            sample_coords = x.reshape(1, N, x.shape[1], 3) # [N, 1, 1, 3]    
-            sample = F.grid_sample(self.fm, sample_coords[...,self.dims], 
-                                   align_corners=True, padding_mode=self.padding_mode)[0,:,:,:].transpose(0,1)
-        else:
-            sample_coords = x.reshape(1, N, 1, 3) # [N, 1, 1, 3]    
-            sample = F.grid_sample(self.fm, sample_coords[...,self.dims], 
-                                    align_corners=True, padding_mode=self.padding_mode)[0,:,:,0].transpose(0,1)
-        return sample
+def normalized_grid_coords(height, width, aspect=True, device="cuda"):
+    """Return the normalized [-1, 1] grid coordinates given height and width.
 
+    Args:
+        height (int) : height of the grid.
+        width (int) : width of the grid.
+        aspect (bool) : if True, use the aspect ratio to scale the coordinates, in which case the 
+                        coords will not be normalzied to [-1, 1]. (Default: True)
+        device : the device the tensors will be created on.
+    """
+    aspect_ratio = width/height if aspect else 1.0
 
-def sample_from_grid(coords, grid, padding_mode="reflection"):
+    window_x = torch.linspace(-1, 1, steps=width, device=device) * aspect_ratio
+    window_y = torch.linspace(1, -1, steps=height, device=device)
+    coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
+    return coord
+
+def sample_from_grid(coords, grid, padding_mode="zeros"):
     """Sample from a discrete grid at continuous coordinates.
 
     Args:
@@ -74,16 +79,55 @@ def sample_from_grid(coords, grid, padding_mode="reflection"):
         grid (torch.FloatTensor): grid of size [H, W, F].
     
     Returns:
-        
+        (torch.FloatTensor): interpolated values of [N, F]
+
     """
     N = coords.shape[0]
-    sample_coords = x.reshape(1, N, 1, 3)
-    samples = F.grid_sample(grid, sample_coords, align_corners=True,
-                            padding_mode=self.padding_mode)[0,:,:,0].transpose(0,1)
+    sample_coords = coords.reshape(1, N, 1, 2)
+    samples = F.grid_sample(grid[None].permute(0,3,1,2), sample_coords, align_corners=True,
+                            padding_mode=padding_mode)[0,:,:,0].transpose(0,1)
     return samples
 
+def semi_lagrangian_backtrace(coords, grid, velocities, timestep):
+    """Perform semi-Lagrangian backtracing at continuous coordinates.
 
+    Warning: PyTorch follows rather stupid conventions, so the flow field is [w, h] but the grid is [h, w]
 
+    Args:
+        coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [N, 2]
+        grid (torch.FloatTensor): grid of features of size [H, W, F]
+        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
+        timestep (float) : timestep of the simulation
+
+    Returns
+        (torch.FloatTensor): backtracked values of [N, F]
+    """
+
+    # Velocities aren't necessarily on the same grid as the coords
+    velocities_at_coords = sample_from_grid(coords, velocities)
+    
+    # Equation 3.22 from Doyub's book
+    samples = sample_from_grid(coords - timestep * velocities_at_coords, grid)
+    return samples
+
+def semi_lagrangian_advection(coords, velocities, grid, timestep):
+    """Performs advection and updates the grid.
+    
+    This method is similar to the `semi_lagrangian_backtrace` function, but assumes the `coords` are 
+    perfectly aligned with the `grid`. 
+
+    Args:
+        coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [H, W, 2]
+        grid (torch.FloatTensor): grid of features of size [H, W, F]
+        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
+        timestep (float) : timestep of the simulation
+
+    Returns
+        (torch.FloatTensor): advaceted grid of [H, W, F]
+    """
+    H, W = coords.shape[:2]
+    samples = semi_lagrangian_backtrace(coords.reshape(-1, 2), grid, velocities, timestep)
+    return samples.reshape(H, W, -1)
 
 @contextmanager
 def cuda_activate(img):
@@ -105,11 +149,6 @@ def create_shared_texture(w, h, c=4,
 backend = "glumpy.app.window.backends.backend_glfw"
 importlib.import_module(backend)
 
-def normalized_grid(height, width, device="cuda"):
-    window_x = torch.linspace(-1, 1, steps=width, device=device) * (width / height)
-    window_y = torch.linspace(1, -1, steps=height, device=device)
-    coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
-    return coord
 
 def grad_mat_generator(n):
     mat_size = (n - 1) * n
@@ -157,35 +196,25 @@ def remove_divergence(v, x_mapper, y_mapper):
 
     return v
 
+def load_rgb(path):
+    img = imageio.imread(path)
+    img = skimage.img_as_float32(img)
+    img = img[:,:,:3]
+    return img
 
-
-def advect_and_apply_changes(mass_matrix, v, X, Y, width, height):
-    image = np.zeros(self.height, self.width)
-    coordinates = np.stack([(X - v[:, :, 0] * time_step) * self.width, (Y - v[:, :, 1] * time_step) * self.height], axis=0)
-    image[:, :, 0] = ndimage.map_coordinates(image[:, :, 0], coordinates, mode='wrap')
-    image[:, :, 1] = ndimage.map_coordinates(image[:, :, 1], coordinates, mode='wrap')
-    image[:, :, 2] = ndimage.map_coordinates(image[:, :, 2], coordinates, mode='wrap')
-    # The mass matrix needs to be moved along the points
-    mass_matrix = ndimage.map_coordinates(mass_matrix, coordinates, mode='wrap')
-    v[:, :, 0] = ndimage.map_coordinates(v[:, :, 0], coordinates, mode='wrap')
-    v[:, :, 1] = ndimage.map_coordinates(v[:, :, 1], coordinates, mode='wrap')
-    return image, mass_matrix, v
-
-def advect_and_apply_changes(particles, velocities):
-    """Apply advection on the particles to animate the image.
-
-    Args:
-        feats (torch.FloatTensor) : 
-        particles (torch.FloatTensor) : an array of (x_coord, y_coord, mass) of size [N, 3]
-        velocities (torch.FloatTensor) : an Eulerian grid of velocities of size [H,W,2]
-    """
-
-
+def resize_rgb(img, height, width, interpolation=cv2.INTER_LINEAR):
+    img = cv2.resize(img, dsize=(height, width), interpolation=interpolation)
+    return img
 
 class InteractiveApp(sys.modules[backend].Window):
 
     #def __init__(self, render_res=[720, 1024]):
-    def __init__(self, render_res=[100, 200]):
+    #def __init__(self, render_res=[100, 200]):
+    def __init__(self):
+        
+        self.rgb = torch.from_numpy(load_rgb("data/kirby.jpg")).cuda()
+        render_res = self.rgb.shape[:2]
+
         super().__init__(width=render_res[1], height=render_res[0], 
                          fullscreen=False, config=app.configuration.get_default())
         
@@ -236,10 +265,11 @@ class InteractiveApp(sys.modules[backend].Window):
         # render with pytorch
         state = torch.zeros(*self.render_res, 4, device='cuda')
 
-        coords = normalized_grid(*self.render_res)
+        coords = normalized_grid_coords(*self.render_res)
 
-        state[...,:2] = self.render(coords)
+        state[...,:3] = self.render(coords)
         state[...,3] = 1
+        state = torch.flip(state, [0])
 
         img = (255*state).byte().contiguous()
 
@@ -267,27 +297,31 @@ class InteractiveApp(sys.modules[backend].Window):
     def init_state(self):
 
         self.gravity = 1e-6
-        self.time_step = 1e-1
+        self.timestep = 1e-1
+        
+        self.image_coords = normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
+        self.image_coords[...,1] *= -1
 
-    
         if self.mode == "stable_fluids":
+            self.grid_width = self.width // 8
+            self.grid_height = self.height // 8
+            
             # Operator Initialization
             # For mapping the velocities from nodes to edges and vice versa
-            self.y_mapper = sparse.kron(sparse.identity(self.width), interpolator_generator(self.height))
-            self.x_mapper = sparse.kron(interpolator_generator(self.width), sparse.identity(self.height))
+            self.y_mapper = sparse.kron(sparse.identity(self.grid_width), interpolator_generator(self.grid_height))
+            self.x_mapper = sparse.kron(interpolator_generator(self.grid_width), sparse.identity(self.grid_height))
             # For Computing gradient, divergence, and Laplacian
-            self.x_gradient = sparse.kron(grad_mat_generator(self.width), sparse.identity(self.height - 1))
-            self.y_gradient = sparse.kron(sparse.identity(self.width - 1), grad_mat_generator(self.height))
-            self.laplacian = sparse.kronsum(laplacian_mat_generator(self.height),laplacian_mat_generator(self.width))
+            self.x_gradient = sparse.kron(grad_mat_generator(self.grid_width), 
+                                          sparse.identity(self.grid_height - 1))
+            self.y_gradient = sparse.kron(sparse.identity(self.grid_width - 1), 
+                                          grad_mat_generator(self.grid_height))
+            self.laplacian = sparse.kronsum(laplacian_mat_generator(self.grid_height),
+                                            laplacian_mat_generator(self.grid_width))
             # Prefactorize the Laplacian matrix for better performance
-            self.factorized_laplacian = linalg.factorized(self.laplacian)    
-            self.velocities = np.zeros([self.height, self.width, 2])
-            X, Y = np.meshgrid(np.linspace(0,1,self.width, endpoint=False), np.linspace(0,1,self.height, endpoint=False), indexing='ij')
+            self.factorized_laplacian = linalg.factorized(self.laplacian)
+            self.velocities = torch.zeros([self.grid_height, self.grid_width, 2], device='cuda')
 
-            self.particles = 
-
-            import pdb; pdb.set_trace()
-
+            
         elif self.mode == "neuralff":
             self.net = BasicNetwork()
             self.net = self.net.to('cuda')
@@ -296,15 +330,17 @@ class InteractiveApp(sys.modules[backend].Window):
     def render(self, coords):
         if self.mode == "stable_fluids":
             # Add external forces
-            self.velocities[..., 0] += 10 * self.time_step * self.gravity
+            self.velocities[..., 1] += 9.8 * self.timestep * self.gravity
             
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
-    
-            image, mass_matrix, v = advect_and_apply_changes( mass_matrix, v, X, Y, self.width, self.height)
+
+            self.rgb = semi_lagrangian_advection(self.image_coords, self.velocities, self.rgb, self.timestep)
+            return self.rgb
 
         elif self.mode == "neuralff":
             return self.net(coords * 100)
+
 
 if __name__=='__main__':
     app.use('glfw')
