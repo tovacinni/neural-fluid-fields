@@ -22,7 +22,7 @@
 import torch
 from .grid_ops import sample_from_grid
 
-def semi_lagrangian_backtrace(coords, grid, velocities, timestep):
+def semi_lagrangian_backtrace(coords, grid, velocity_field, timestep):
     """Perform semi-Lagrangian backtracing at continuous coordinates.
 
     Warning: PyTorch follows rather stupid conventions, so the flow field is [w, h] but the grid is [h, w]
@@ -30,7 +30,7 @@ def semi_lagrangian_backtrace(coords, grid, velocities, timestep):
     Args:
         coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [N, 2]
         grid (torch.FloatTensor): grid of features of size [H, W, F]
-        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
+        velocity_field (neuralff.Field): Eulerian vector field. This can be any Field representation.
         timestep (float) : timestep of the simulation
 
     Returns
@@ -38,13 +38,13 @@ def semi_lagrangian_backtrace(coords, grid, velocities, timestep):
     """
 
     # Velocities aren't necessarily on the same grid as the coords
-    velocities_at_coords = sample_from_grid(coords, velocities)
+    velocities_at_coords = velocity_field.sample(coords)
     
     # Equation 3.22 from Doyub's book
     samples = sample_from_grid(coords - timestep * velocities_at_coords, grid)
     return samples
 
-def semi_lagrangian_advection(coords, velocities, grid, timestep):
+def semi_lagrangian_advection(coords, grid, velocity_field, timestep):
     """Performs advection and updates the grid.
     
     This method is similar to the `semi_lagrangian_backtrace` function, but assumes the `coords` are 
@@ -53,14 +53,14 @@ def semi_lagrangian_advection(coords, velocities, grid, timestep):
     Args:
         coords (torch.FloatTensor): continuous coordinates in normalized coords [-1, 1] of size [H, W, 2]
         grid (torch.FloatTensor): grid of features of size [H, W, F]
-        velocities (torch.FloatTensor): Eulerian grid of size [vH, vW, 2]
+        velocity_field (neuralff.Field): Eulerian vector field. This can be any Field representation.
         timestep (float) : timestep of the simulation
 
     Returns
         (torch.FloatTensor): advaceted grid of [H, W, F]
     """
     H, W = coords.shape[:2]
-    samples = semi_lagrangian_backtrace(coords.reshape(-1, 2), grid, velocities, timestep)
+    samples = semi_lagrangian_backtrace(coords.reshape(-1, 2), grid, velocity_field, timestep)
     return samples.reshape(H, W, -1)
 
 

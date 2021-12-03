@@ -35,6 +35,7 @@ from glumpy import app, gloo, gl
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
+import neuralff
 from neuralff.model import BasicNetwork
 import neuralff.ops as nff_ops
 
@@ -74,7 +75,6 @@ def create_shared_texture(w, h, c=4,
 
 backend = "glumpy.app.window.backends.backend_glfw"
 importlib.import_module(backend)
-
 
 def grad_mat_generator(n):
     mat_size = (n - 1) * n
@@ -181,7 +181,8 @@ class InteractiveApp(sys.modules[backend].Window):
         self.screen['scale'] = 1.0
         self.screen['tex'] = self.tex
 
-        self.mode = "stable_fluids"
+        #self.mode = "stable_fluids"
+        self.mode = "neuralff"
 
     def on_draw(self, dt):
         self.set_title(str(self.fps).encode("ascii"))
@@ -223,7 +224,8 @@ class InteractiveApp(sys.modules[backend].Window):
     def init_state(self):
 
         self.gravity = 1e-4
-        self.timestep = 1e-1
+        #self.timestep = 1e-1
+        self.timestep = 5e-2
         
         self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
         self.image_coords[...,1] *= -1
@@ -245,27 +247,26 @@ class InteractiveApp(sys.modules[backend].Window):
                                             laplacian_mat_generator(self.grid_width))
             # Prefactorize the Laplacian matrix for better performance
             self.factorized_laplacian = linalg.factorized(self.laplacian)
-            self.velocities = torch.zeros([self.grid_height, self.grid_width, 2], device='cuda')
+            self.velocity_field = neuralff.RegularVectorField(self.grid_height, self.grid_width).cuda()
+            self.velocity_field.requires_grad_(False)
 
-            
         elif self.mode == "neuralff":
-            self.net = BasicNetwork()
-            self.net = self.net.to('cuda')
-            self.net.eval()
             
+            self.velocity_field = neuralff.NeuralField().cuda()
+            self.velocity_field.requires_grad_(False)
+            self.velocity_field.eval()
+
     def render(self, coords):
+        
         if self.mode == "stable_fluids":
             # Add external forces
-            self.velocities[..., 1] += 9.8 * self.timestep * self.gravity
+            self.velocity_field.vector_field[..., 1] += 9.8 * self.timestep * self.gravity
             
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-            self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.velocities, self.rgb, self.timestep)
-            return self.rgb
-
-        elif self.mode == "neuralff":
-            return self.net(coords * 100)
+        self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
+        return self.rgb
 
 
 if __name__=='__main__':

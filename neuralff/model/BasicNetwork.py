@@ -29,8 +29,8 @@ class BasicNetwork(nn.Module):
         output_dim = 2, 
         activation = torch.sin, 
         bias = True, 
-        num_layers = 1, 
-        hidden_dim = 128):
+        num_layers = 4, 
+        hidden_dim = 32):
         
         super().__init__()
         self.activation = activation
@@ -47,6 +47,6 @@ class BasicNetwork(nn.Module):
         h = x
         for i, l in enumerate(self.layers):
             h = self.activation(l(h))
-        out = torch.sigmoid(self.lout(h))
+        out = torch.tanh(self.lout(h))
         return out
 
