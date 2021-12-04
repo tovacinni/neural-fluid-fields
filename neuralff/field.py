@@ -45,6 +45,6 @@ class NeuralField(BaseField):
 
     def sample(self, coords):
         vector = self.vector_field(coords*100)
-        vector[torch.abs(coords) >= 1.0] = 0
+        #vector[torch.abs(coords) >= 1.0] = 0
         return vector
 

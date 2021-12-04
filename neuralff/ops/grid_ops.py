@@ -52,6 +52,7 @@ def sample_from_grid(coords, grid, padding_mode="zeros"):
     """
     N = coords.shape[0]
     sample_coords = coords.reshape(1, N, 1, 2)
+    sample_coords = (sample_coords + 1.0) % 2.0 - 1.0
     samples = F.grid_sample(grid[None].permute(0,3,1,2), sample_coords, align_corners=True,
                             padding_mode=padding_mode)[0,:,:,0].transpose(0,1)
     return samples
