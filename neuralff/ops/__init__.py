@@ -19,8 +19,6 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import neuralff.ops
-import neuralff.model
-import neuralff.loss
-from .field import *
+from .fluid_ops import *
+from .grid_ops import *
 

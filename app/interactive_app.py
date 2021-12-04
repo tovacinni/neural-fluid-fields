@@ -35,7 +35,26 @@ from glumpy import app, gloo, gl
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
+import neuralff
 from neuralff.model import BasicNetwork
+import neuralff.ops as nff_ops
+
+from scipy import sparse
+import scipy.sparse.linalg as linalg
+
+import cv2
+import skimage
+import imageio
+
+def load_rgb(path):
+    img = imageio.imread(path)
+    img = skimage.img_as_float32(img)
+    img = img[:,:,:3]
+    #img -= 0.5
+    #img *= 2.
+    #img = img.transpose(2, 0, 1)
+    img = img.transpose(1, 0, 2)
+    return img
 
 @contextmanager
 def cuda_activate(img):
@@ -57,16 +76,71 @@ def create_shared_texture(w, h, c=4,
 backend = "glumpy.app.window.backends.backend_glfw"
 importlib.import_module(backend)
 
-def normalized_grid(height, width, device="cuda"):
-    window_x = torch.linspace(-1, 1, steps=width, device=device) * (width / height)
-    window_y = torch.linspace(1, -1, steps=height, device=device)
-    coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
-    return coord
+def grad_mat_generator(n):
+    mat_size = (n - 1) * n
+    result = np.zeros(mat_size)
+    result[range(0, mat_size, n + 1)] = -1
+    result[range(1, mat_size, n + 1)] = 1
+    result = result.reshape([n - 1, n])
+    return sparse.csr_matrix(result)
 
+def laplacian_mat_generator(n):
+    mat_size = (n - 1) * (n - 1)
+    result = np.zeros(mat_size)
+    result[range(0, mat_size, n)] = 2
+    result[range(1, mat_size, n)] = -1
+    result[range(n - 1, mat_size, n)] = -1
+    result = result.reshape([n - 1, n - 1])
+    return sparse.csr_matrix(result)
+
+def interpolator_generator(n):
+    mat_size = (n - 1) * n
+    result = np.zeros(mat_size)
+    result[range(0, mat_size, n + 1)] = 0.5
+    result[range(1, mat_size, n + 1)] = 0.5
+    result = result.reshape([n - 1, n])
+    return sparse.csr_matrix(result)
+
+def remove_divergence(v, x_mapper, y_mapper):
+    # v = v_divergence_free + grad(w)
+    # div(v) = laplacian(w)
+    # w = laplacian \ div(v)
+
+    # Map velocities from nodes to edges
+    vx = y_mapper.dot(v[:,:,0].ravel()).reshape(self.width, self.height - 1)
+    vy = x_mapper.dot(v[:,:,1].ravel()).reshape(self.width - 1, self.height)
+
+    # Compute grad(w)
+    divergence = x_gradient.dot(vx.ravel()) + y_gradient.dot(vy.ravel())
+    w = factorized_laplacian(divergence.ravel())
+    grad_w_x = x_gradient.T.dot(w).reshape(self.width, self.height - 1).ravel()
+    grad_w_y = y_gradient.T.dot(w).reshape(self.width - 1, self.height).ravel()
+
+    # Make the velocity divergence-free and map it back from edges to nodes
+    v[:,:,0] -= y_mapper.T.dot(grad_w_x).reshape(self.width, self.height)
+    v[:,:,1] -= x_mapper.T.dot(grad_w_y).reshape(self.width, self.height)
+
+    return v
+
+def load_rgb(path):
+    img = imageio.imread(path)
+    img = skimage.img_as_float32(img)
+    img = img[:,:,:3]
+    return img
+
+def resize_rgb(img, height, width, interpolation=cv2.INTER_LINEAR):
+    img = cv2.resize(img, dsize=(height, width), interpolation=interpolation)
+    return img
 
 class InteractiveApp(sys.modules[backend].Window):
 
-    def __init__(self, render_res=[720, 1024]):
+    #def __init__(self, render_res=[720, 1024]):
+    #def __init__(self, render_res=[100, 200]):
+    def __init__(self):
+        
+        self.rgb = torch.from_numpy(load_rgb("data/kirby.jpg")).cuda()
+        render_res = self.rgb.shape[:2]
+
         super().__init__(width=render_res[1], height=render_res[0], 
                          fullscreen=False, config=app.configuration.get_default())
         
@@ -106,12 +180,9 @@ class InteractiveApp(sys.modules[backend].Window):
         self.screen['texcoord'] = [(0,0), (0,1), (1,0), (1,1)]
         self.screen['scale'] = 1.0
         self.screen['tex'] = self.tex
-    
-    def init_state(self):
 
-        self.net = BasicNetwork()
-        self.net = self.net.to('cuda')
-        self.net.eval()
+        #self.mode = "stable_fluids"
+        self.mode = "neuralff"
 
     def on_draw(self, dt):
         self.set_title(str(self.fps).encode("ascii"))
@@ -121,10 +192,11 @@ class InteractiveApp(sys.modules[backend].Window):
         # render with pytorch
         state = torch.zeros(*self.render_res, 4, device='cuda')
 
-        coords = normalized_grid(*self.render_res)
+        coords = nff_ops.normalized_grid_coords(*self.render_res)
 
-        state[...,:2] = self.net(coords * 100)
+        state[...,:3] = self.render(coords)
         state[...,3] = 1
+        state = torch.flip(state, [0])
 
         img = (255*state).byte().contiguous()
 
@@ -144,6 +216,58 @@ class InteractiveApp(sys.modules[backend].Window):
 
     def on_close(self):
         pycuda.gl.autoinit.context.pop()
+
+    ####################################
+    # Application specific code
+    ####################################
+
+    def init_state(self):
+
+        self.gravity = 1e-4
+        #self.timestep = 1e-1
+        self.timestep = 5e-2
+        
+        self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
+        self.image_coords[...,1] *= -1
+
+        if self.mode == "stable_fluids":
+            self.grid_width = self.width // 8
+            self.grid_height = self.height // 8
+            
+            # Operator Initialization
+            # For mapping the velocities from nodes to edges and vice versa
+            self.y_mapper = sparse.kron(sparse.identity(self.grid_width), interpolator_generator(self.grid_height))
+            self.x_mapper = sparse.kron(interpolator_generator(self.grid_width), sparse.identity(self.grid_height))
+            # For Computing gradient, divergence, and Laplacian
+            self.x_gradient = sparse.kron(grad_mat_generator(self.grid_width), 
+                                          sparse.identity(self.grid_height - 1))
+            self.y_gradient = sparse.kron(sparse.identity(self.grid_width - 1), 
+                                          grad_mat_generator(self.grid_height))
+            self.laplacian = sparse.kronsum(laplacian_mat_generator(self.grid_height),
+                                            laplacian_mat_generator(self.grid_width))
+            # Prefactorize the Laplacian matrix for better performance
+            self.factorized_laplacian = linalg.factorized(self.laplacian)
+            self.velocity_field = neuralff.RegularVectorField(self.grid_height, self.grid_width).cuda()
+            self.velocity_field.requires_grad_(False)
+
+        elif self.mode == "neuralff":
+            
+            self.velocity_field = neuralff.NeuralField().cuda()
+            self.velocity_field.requires_grad_(False)
+            self.velocity_field.eval()
+
+    def render(self, coords):
+        
+        if self.mode == "stable_fluids":
+            # Add external forces
+            self.velocity_field.vector_field[..., 1] += 9.8 * self.timestep * self.gravity
+            
+            # Remove divergence
+            #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
+
+        self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
+        return self.rgb
+
 
 if __name__=='__main__':
     app.use('glfw')

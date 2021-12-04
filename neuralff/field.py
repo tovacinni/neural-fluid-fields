@@ -19,8 +19,32 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import neuralff.ops
-import neuralff.model
-import neuralff.loss
-from .field import *
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from .ops import sample_from_grid
+from .model import BasicNetwork
+
+class BaseField(nn.Module):
+    def sample(coords):
+        raise NotImplementedError
+
+class RegularVectorField(BaseField):
+    def __init__(self, height, width):
+        super().__init__()
+        self.vector_field = nn.Parameter(torch.zeros([height, width, 2]))
+
+    def sample(self, coords):
+        return sample_from_grid(coords, self.vector_field)
+
+class NeuralField(BaseField):
+    def __init__(self):
+        super().__init__()
+        self.vector_field = BasicNetwork()
+
+    def sample(self, coords):
+        vector = self.vector_field(coords*100)
+        #vector[torch.abs(coords) >= 1.0] = 0
+        return vector
 
