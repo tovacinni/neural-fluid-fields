@@ -48,7 +48,13 @@ class BasicNetwork(nn.Module):
     def forward(self, x):
         h = x
         for i, l in enumerate(self.layers):
-            h = self.hidden_activation(l(h))
-        out = self.output_activation(self.lout(h))
+            if self.hidden_activation is not None:
+                h = self.hidden_activation(l(h))
+            else:
+                h = l(h)
+        if self.output_activation is not None:
+            out = self.output_activation(self.lout(h))
+        else:
+            out = self.lout(h)
         return out
 
