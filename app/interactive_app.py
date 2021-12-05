@@ -184,12 +184,19 @@ class InteractiveApp(sys.modules[backend].Window):
         #self.mode = "stable_fluids"
         self.mode = "neuralff"
 
-        self.display_modes = ["rgb", "velocity", "divergence"]
-        self.display_mode = self.display_modes[0]
+        self.display_modes = ["rgb", "pressure", "velocity", "divergence", "navier-stokes"]
         self.display_mode_idx = 0
+        self.display_mode = self.display_modes[self.display_mode_idx]
+        self.max_error = 0.0
 
     def on_draw(self, dt):
-        self.set_title(str(self.fps).encode("ascii"))
+        title = f"FPS: {self.fps:.3f}"
+        title += f"  Buffer: {self.display_mode}"
+        
+        if self.display_mode == "divergence" or self.display_mode == "navier-stokes":
+            title += f"  Max Error: {self.max_error:.3e}"
+
+        self.set_title(title.encode("ascii"))
         tex = self.screen['tex']
         h,w = tex.shape[:2]
 
@@ -270,9 +277,33 @@ class InteractiveApp(sys.modules[backend].Window):
 
         elif self.mode == "neuralff":
             
-            self.velocity_field = neuralff.NeuralField().cuda()
+            velocity_field_config = {
+                "input_dim" : 2,    
+                "output_dim" : 2,    
+                "hidden_activation" : torch.sin,    
+                "output_activation" : torch.tanh,
+                "bias" : True,    
+                "num_layers" : 4,    
+                "hidden_dim" : 32,    
+            }
+            
+            self.velocity_field = neuralff.NeuralField(**velocity_field_config).cuda()
             self.velocity_field.requires_grad_(False)
             self.velocity_field.eval()
+            
+            pressure_field_config = {
+                "input_dim" : 2,    
+                "output_dim" : 1,    
+                "hidden_activation" : torch.sin,    
+                "output_activation" : torch.tanh,
+                "bias" : True,    
+                "num_layers" : 1,    
+                "hidden_dim" : 32,    
+            }
+
+            self.pressure_field = neuralff.NeuralField(**pressure_field_config).cuda()
+            self.pressure_field.requires_grad_(False)
+            self.pressure_field.eval()
 
     def render(self, coords):
         
@@ -286,13 +317,20 @@ class InteractiveApp(sys.modules[backend].Window):
         if self.display_mode == "rgb": 
             self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
             return self.rgb
+        elif self.display_mode == "pressure":
+            return (1.0 + self.pressure_field.sample(self.image_coords)) / 2.0
         elif self.display_mode == "velocity":
             return (1.0 + F.normalize(self.velocity_field.sample(self.image_coords), dim=-1)) / 2.0
         elif self.display_mode == "divergence":
-            div = torch.abs(nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff'))
-            return div / div.max()
+            div = nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff')**2
+            self.max_error = div.max()
+            return div / self.max_error
+        elif self.display_mode == "navier-stokes":
+            loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+            self.max_error = loss.max()
+            return loss / self.max_error
         else:
-            raise NotImplementedError
+            return torch.zeros_like(coords)
 
 if __name__=='__main__':
     app.use('glfw')
