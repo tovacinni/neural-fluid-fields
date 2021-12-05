@@ -447,8 +447,7 @@ class InteractiveApp(sys.modules[backend].Window):
                 self.max_error = max(err, self.max_error)
                 #return div / self.max_error
                 return div / err
-            elif self.display_mode == "navier-stokes":
-                #loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+            elif self.display_mode == "euler":
                 loss = nff_ops.euler_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
                 err = loss.max()
                 self.curr_error = err
