@@ -92,12 +92,15 @@ def divergence(u, f, method='finitediff', eps=1e-7):
     """Compute the divergence of the vector field `f` with respect to the input `u`.
 
     Args:
-        u (torch.Tensor) : the input to the function f
-        f (function) : some vector field (must support autodiff if using method='autodiff')
+        u (torch.Tensor) : the input to the function f of shape [..., D]
+        f (function) : some vector field (must support autodiff if using method='autodiff') with output dim [D]
         method (str) : method for calculating the Jacobian. 
             options: ['autodiff', 'finitediff']
 
         Finite diff currently assumes that `u` represents a 2D vector field.
+
+        Returns:
+            (torch.Tensor) : divergence of shape [..., 1]
     """
     if method == 'autodiff':
         raise NotImplementedError
@@ -106,7 +109,55 @@ def divergence(u, f, method='finitediff', eps=1e-7):
     if method == 'finitediff':
         eps_x = torch.tensor([eps, 0.0], device=u.device)
         eps_y = torch.tensor([0.0, eps], device=u.device)
-        dfxux = f(u + eps_x)[...,0] - f(u - eps_x)[...,0] 
-        dfyuy = f(u + eps_y)[...,1] - f(u - eps_y)[...,1]
+        dfxux = f(u + eps_x)[...,0:1] - f(u - eps_x)[...,0:1] 
+        dfyuy = f(u + eps_y)[...,1:2] - f(u - eps_y)[...,1:2]
         return (dfxux + dfyuy)/(eps*2.0)
+
+def curl(u, f, method='finitediff', eps=1e-7):
+    """Compute the curl of the vector field `f` with respect to the input `u`.
+
+    Args:
+        u (torch.Tensor) : the input to the function f of shape [..., D]
+        f (function) : some vector field (must support autodiff if using method='autodiff') with output dim [D]
+        method (str) : method for calculating the curl. 
+            options: ['autodiff', 'finitediff']
+
+        Finite diff currently assumes that `u` represents a 2D vector field.
+
+        Returns:
+            (torch.Tensor) : curl of shape [..., 1]
+    """
+    if method == 'autodiff':
+        raise NotImplementedError
+    if method == 'finitediff':
+        eps_x = torch.tensor([eps, 0.0], device=u.device)
+        eps_y = torch.tensor([0.0, eps], device=u.device)
+        dfyux = f(u + eps_x)[...,1:2] - f(u - eps_x)[...,1:2] 
+        dfxuy = f(u + eps_y)[...,0:1] - f(u - eps_y)[...,0:1]
+        return (dfyux+dfxuy)/(eps*2.0)
+
+def laplacian(u, f, method='finitediff', eps=1e-7):
+    """Compute the Laplacian of the vector field `f` with respect to the input `u`.
+
+    Note: the Laplacian of a vector field is just the vector of Laplacians of its components.
+
+    Args:
+        u (torch.Tensor) : the input to the function f of shape [..., D]
+        f (function) : some vector field (must support autodiff if using method='autodiff') with output dim [D]
+        method (str) : method for calculating the Laplacian. 
+            options: ['autodiff', 'finitediff']
+
+        Finite diff currently assumes that `u` represents a 2D vector field.
+
+        Returns:
+            (torch.Tensor) : Laplacian of shape [..., 1]
+    """
+    if method == 'autodiff':
+        raise NotImplementedError
+    if method == 'finitediff':
+        fu = 2.0 * f(u)
+        dfux = f(u + eps_x) - fu + f(u - eps_x)
+        dfuy = f(u + eps_y) - fu + f(u - eps_y)
+        return (dfux + dfuy) / (eps**2.0)
+
 
