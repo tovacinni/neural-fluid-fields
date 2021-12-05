@@ -197,7 +197,7 @@ class InteractiveApp(sys.modules[backend].Window):
         self.display_mode_idx = 0
         self.display_mode = self.display_modes[self.display_mode_idx]
         
-        self.optim_modes = ["divergence-free", "split", "euler"]
+        self.optim_modes = ["euler", "divergence-free", "split"]
         self.optim_mode_idx = 0
         self.optim_mode = self.optim_modes[self.optim_mode_idx]
 
