@@ -28,6 +28,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
 import pycuda.driver
 from pycuda.gl import graphics_map_flags
@@ -45,6 +46,8 @@ import scipy.sparse.linalg as linalg
 import cv2
 import skimage
 import imageio
+
+import tqdm
 
 def load_rgb(path):
     img = imageio.imread(path)
@@ -140,6 +143,7 @@ class InteractiveApp(sys.modules[backend].Window):
         
         self.rgb = torch.from_numpy(load_rgb("data/kirby.jpg")).cuda()
         render_res = self.rgb.shape[:2]
+        self.render_res = render_res
 
         super().__init__(width=render_res[1], height=render_res[0], 
                          fullscreen=False, config=app.configuration.get_default())
@@ -150,7 +154,6 @@ class InteractiveApp(sys.modules[backend].Window):
         print('using GPU {}'.format(torch.cuda.current_device()))
         self.buffer = torch.zeros(*render_res, 4, device='cuda')
 
-        self.render_res = render_res
         self.camera_origin = np.array([2.5, 2.5, 2.5])
         self.world_transform = np.eye(3)
     
@@ -188,13 +191,16 @@ class InteractiveApp(sys.modules[backend].Window):
         self.display_mode_idx = 0
         self.display_mode = self.display_modes[self.display_mode_idx]
         self.max_error = 0.0
+        self.curr_error = 0.0
+        self.divergence_optim = False
+        self.navier_optim = False
 
     def on_draw(self, dt):
         title = f"FPS: {self.fps:.3f}"
         title += f"  Buffer: {self.display_mode}"
         
         if self.display_mode == "divergence" or self.display_mode == "navier-stokes":
-            title += f"  Max Error: {self.max_error:.3e}"
+            title += f"  Error: {self.curr_error:.3e}"
 
         self.set_title(title.encode("ascii"))
         tex = self.screen['tex']
@@ -237,20 +243,25 @@ class InteractiveApp(sys.modules[backend].Window):
     ####################################
     
     def on_key_press(self, symbol, modifiers):
-        if symbol == 75:
+        if symbol == 75: # k
             self.display_mode_idx = (self.display_mode_idx + 1) % len(self.display_modes)
             self.display_mode = self.display_modes[self.display_mode_idx]
-        elif symbol == 74:
+        elif symbol == 74: # j
             self.display_mode_idx = (self.display_mode_idx - 1) % len(self.display_modes)
             self.display_mode = self.display_modes[self.display_mode_idx]
-        elif symbol == 81:
+        elif symbol == 81: # q
             self.close()
+        elif symbol == 68: # d
+            self.divergence_optim = not self.divergence_optim
+        elif symbol == 78: # n
+            self.navier_optim = not self.navier_optim
 
     def init_state(self):
 
         self.gravity = 1e-4
         #self.timestep = 1e-1
-        self.timestep = 5e-2
+        #self.timestep = 5e-2
+        self.timestep = 1e-3
         
         self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
         self.image_coords[...,1] *= -1
@@ -284,13 +295,13 @@ class InteractiveApp(sys.modules[backend].Window):
                 "output_activation" : torch.tanh,
                 "bias" : True,    
                 "num_layers" : 4,    
-                "hidden_dim" : 32,    
+                "hidden_dim" : 128,    
             }
             
             self.velocity_field = neuralff.NeuralField(**velocity_field_config).cuda()
-            self.velocity_field.requires_grad_(False)
-            self.velocity_field.eval()
-            
+            #self.velocity_field.requires_grad_(False)
+            #self.velocity_field.eval()
+
             pressure_field_config = {
                 "input_dim" : 2,    
                 "output_dim" : 1,    
@@ -302,8 +313,50 @@ class InteractiveApp(sys.modules[backend].Window):
             }
 
             self.pressure_field = neuralff.NeuralField(**pressure_field_config).cuda()
-            self.pressure_field.requires_grad_(False)
-            self.pressure_field.eval()
+            #self.pressure_field.requires_grad_(False)
+            #self.pressure_field.eval()
+            
+            self.pc_lr = 5e-4
+            self.precondition_optimizer = optim.Adam([
+                {"params": self.velocity_field.parameters(), "lr":self.pc_lr},
+                {"params": self.pressure_field.parameters(), "lr":self.pc_lr},
+            ])
+
+            self.lr = 1e-3
+            self.divergence_optimizer = optim.Adam([
+                {"params": self.velocity_field.parameters(), "lr":self.lr},
+            ])
+            
+            self.navier_optimizer = optim.Adam([
+                {"params": self.velocity_field.parameters(), "lr":self.lr},
+                {"params": self.pressure_field.parameters(), "lr":self.lr},
+            ])
+
+            self.precondition()
+
+    def precondition(self):
+
+        num_batch = 10
+        batch_size = 512
+        epochs = 100
+        pts = torch.rand([batch_size*num_batch, 2], device='cuda') * 2.0 - 1.0
+        initial_velocity = self.velocity_field.sample(pts).detach()
+
+        for i in tqdm.tqdm(range(epochs)):
+            for j in range(num_batch):
+                self.velocity_field.zero_grad()
+                self.pressure_field.zero_grad()
+                loss = nff_ops.navier_stokes_loss(
+                        pts[j*batch_size:(j+1)*batch_size], 
+                        self.velocity_field, self.pressure_field, self.timestep,
+                        initial_velocity=initial_velocity[j*batch_size:(j+1)*batch_size]) 
+                loss = loss.mean()
+                loss.backward()
+                self.precondition_optimizer.step()
+
+                if i % 30 == 0:
+                    print(f"Loss: {loss:.5e}")
+
 
     def render(self, coords):
         
@@ -314,23 +367,47 @@ class InteractiveApp(sys.modules[backend].Window):
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-        if self.display_mode == "rgb": 
-            self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
-            return self.rgb
-        elif self.display_mode == "pressure":
-            return (1.0 + self.pressure_field.sample(self.image_coords)) / 2.0
-        elif self.display_mode == "velocity":
-            return (1.0 + F.normalize(self.velocity_field.sample(self.image_coords), dim=-1)) / 2.0
-        elif self.display_mode == "divergence":
-            div = nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff')**2
-            self.max_error = div.max()
-            return div / self.max_error
-        elif self.display_mode == "navier-stokes":
-            loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
-            self.max_error = loss.max()
-            return loss / self.max_error
-        else:
-            return torch.zeros_like(coords)
+        if self.divergence_optim:
+            for i in range(1):
+                self.velocity_field.zero_grad()
+                pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
+                div = nff_ops.divergence(pts, self.velocity_field, method='finitediff')**2
+                div.mean().backward()
+                self.divergence_optimizer.step()
+
+        elif self.navier_optim:
+            for i in range(2):
+                self.pressure_field.zero_grad()
+                self.velocity_field.zero_grad()
+                pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
+                loss = nff_ops.navier_stokes_loss(pts, self.velocity_field, self.pressure_field, self.timestep)
+                loss.mean().backward()
+                self.navier_optimizer.step()
+    
+
+        with torch.no_grad():
+            if self.display_mode == "rgb": 
+                self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
+                return self.rgb
+            elif self.display_mode == "pressure":
+                return (1.0 + self.pressure_field.sample(self.image_coords)) / 2.0
+            elif self.display_mode == "velocity":
+                return (1.0 + F.normalize(self.velocity_field.sample(self.image_coords), dim=-1)) / 2.0
+            elif self.display_mode == "divergence":
+                div = nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff')**2
+                err = div.max()
+                self.curr_error = err
+                self.max_error = max(err, self.max_error)
+                #return div / self.max_error
+                return div / err
+            elif self.display_mode == "navier-stokes":
+                loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+                err = loss.max()
+                self.curr_error = err
+                self.max_error = max(err, self.max_error)
+                return loss / self.max_error
+            else:
+                return torch.zeros_like(coords)
 
 if __name__=='__main__':
     app.use('glfw')
