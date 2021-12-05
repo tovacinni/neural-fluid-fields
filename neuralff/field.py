@@ -27,8 +27,10 @@ from .ops import sample_from_grid
 from .model import BasicNetwork
 
 class BaseField(nn.Module):
-    def sample(coords):
+    def sample(self, coords):
         raise NotImplementedError
+    def forward(self, coords):
+        return self.sample(coords)
 
 class RegularVectorField(BaseField):
     def __init__(self, height, width):
