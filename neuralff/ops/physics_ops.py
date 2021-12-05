@@ -81,10 +81,10 @@ def gravity(coords, timestep):
         (torch.Tensor) : gravity tensor of shape [N, D]
     """
     g = torch.zeros_like(coords)
-    g[...,1] = 9.8 * timestep
+    g[..., 1] = 9.8 * 1e-4
     return g
 
-def divergence_free_loss(coords, velocity_field, eps=1e-3)
+def divergence_free_loss(coords, velocity_field, eps=1e-3):
     """Computes the divergence-free equation loss.
 
         eq 1 : div u = 0
@@ -169,7 +169,7 @@ def incompressibility_loss(coords, pressure_field, timestep, eps=1e-3, rho=1e-3,
 
 def euler_loss(
         coords, velocity_field, pressure_field, 
-        timestep, rho=1e-3, eps=1e-3, initial_velocity=None):
+        timestep, rho=1e-1, eps=1e-3, initial_velocity=None):
     """Computes the incompressible Euler equation loss.
 
     We use the following definition of the Euler equation (from Bridson):

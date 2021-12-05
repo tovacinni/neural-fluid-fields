@@ -145,6 +145,12 @@ class InteractiveApp(sys.modules[backend].Window):
         render_res = self.rgb.shape[:2]
         self.render_res = render_res
 
+        print("Controls:")
+        print("h,l: switch optimization modes")
+        print("j,k: switch display buffer")
+        print("q  : quit simulation")
+        print("n  : begin simulation")
+
         super().__init__(width=render_res[1], height=render_res[0], 
                          fullscreen=False, config=app.configuration.get_default())
         
@@ -187,13 +193,17 @@ class InteractiveApp(sys.modules[backend].Window):
         #self.mode = "stable_fluids"
         self.mode = "neuralff"
 
-        self.display_modes = ["rgb", "pressure", "velocity", "divergence", "navier-stokes"]
+        self.display_modes = ["rgb", "pressure", "velocity", "divergence", "euler"]
         self.display_mode_idx = 0
         self.display_mode = self.display_modes[self.display_mode_idx]
+        
+        self.optim_modes = ["divergence-free", "split", "euler"]
+        self.optim_mode_idx = 0
+        self.optim_mode = self.optim_modes[self.optim_mode_idx]
+
         self.max_error = 0.0
         self.curr_error = 0.0
-        self.divergence_optim = False
-        self.navier_optim = False
+        self.optim_switch = False
 
     def on_draw(self, dt):
         title = f"FPS: {self.fps:.3f}"
@@ -201,6 +211,8 @@ class InteractiveApp(sys.modules[backend].Window):
         
         if self.display_mode == "divergence" or self.display_mode == "navier-stokes":
             title += f"  Error: {self.curr_error:.3e}"
+        
+        title += f"  Optimizing: {self.optim_mode}"
 
         self.set_title(title.encode("ascii"))
         tex = self.screen['tex']
@@ -251,17 +263,21 @@ class InteractiveApp(sys.modules[backend].Window):
             self.display_mode = self.display_modes[self.display_mode_idx]
         elif symbol == 81: # q
             self.close()
-        elif symbol == 68: # d
-            self.divergence_optim = not self.divergence_optim
         elif symbol == 78: # n
-            self.navier_optim = not self.navier_optim
+            self.optim_switch = not self.optim_switch
+        elif symbol == 76: # l
+            self.optim_mode_idx = (self.optim_mode_idx + 1) % len(self.optim_modes)
+            self.optim_mode = self.optim_modes[self.optim_mode_idx]
+        elif symbol == 72: # h
+            self.optim_mode_idx = (self.optim_mode_idx - 1) % len(self.optim_modes)
+            self.optim_mode = self.optim_modes[self.optim_mode_idx]
 
     def init_state(self):
 
-        self.gravity = 1e-4
+        #self.gravity = 1e-4
         #self.timestep = 1e-1
-        #self.timestep = 5e-2
-        self.timestep = 1e-3
+        self.timestep = 5e-2
+        #self.timestep = 1e-5
         
         self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
         self.image_coords[...,1] *= -1
@@ -292,10 +308,10 @@ class InteractiveApp(sys.modules[backend].Window):
                 "input_dim" : 2,    
                 "output_dim" : 2,    
                 "hidden_activation" : torch.sin,    
-                "output_activation" : torch.tanh,
+                "output_activation" : None,
                 "bias" : True,    
                 "num_layers" : 4,    
-                "hidden_dim" : 128,    
+                "hidden_dim" : 32,    
             }
             
             self.velocity_field = neuralff.NeuralField(**velocity_field_config).cuda()
@@ -306,9 +322,9 @@ class InteractiveApp(sys.modules[backend].Window):
                 "input_dim" : 2,    
                 "output_dim" : 1,    
                 "hidden_activation" : torch.sin,    
-                "output_activation" : torch.tanh,
+                "output_activation" : None,
                 "bias" : True,    
-                "num_layers" : 1,    
+                "num_layers" : 2,    
                 "hidden_dim" : 32,    
             }
 
@@ -316,18 +332,16 @@ class InteractiveApp(sys.modules[backend].Window):
             #self.pressure_field.requires_grad_(False)
             #self.pressure_field.eval()
             
-            self.pc_lr = 5e-4
+            #self.pc_lr = 5e-4
+            self.pc_lr = 1e-4
             self.precondition_optimizer = optim.Adam([
                 {"params": self.velocity_field.parameters(), "lr":self.pc_lr},
                 {"params": self.pressure_field.parameters(), "lr":self.pc_lr},
             ])
 
-            self.lr = 1e-3
-            self.divergence_optimizer = optim.Adam([
-                {"params": self.velocity_field.parameters(), "lr":self.lr},
-            ])
-            
-            self.navier_optimizer = optim.Adam([
+            self.lr = 1e-4
+            self.optimizer = optim.Adam([
+            #self.optimizer = optim.SGD([
                 {"params": self.velocity_field.parameters(), "lr":self.lr},
                 {"params": self.pressure_field.parameters(), "lr":self.lr},
             ])
@@ -338,27 +352,62 @@ class InteractiveApp(sys.modules[backend].Window):
 
         num_batch = 10
         batch_size = 512
-        epochs = 100
+        epochs = 400
         pts = torch.rand([batch_size*num_batch, 2], device='cuda') * 2.0 - 1.0
+        
         initial_velocity = self.velocity_field.sample(pts).detach()
-
+        """
+        print("Preconditioning body forces...")
         for i in tqdm.tqdm(range(epochs)):
             for j in range(num_batch):
                 self.velocity_field.zero_grad()
                 self.pressure_field.zero_grad()
-                loss = nff_ops.navier_stokes_loss(
+                
+                loss = nff_ops.body_forces_loss(
                         pts[j*batch_size:(j+1)*batch_size], 
-                        self.velocity_field, self.pressure_field, self.timestep,
+                        self.velocity_field, self.timestep, 
                         initial_velocity=initial_velocity[j*batch_size:(j+1)*batch_size]) 
                 loss = loss.mean()
                 loss.backward()
                 self.precondition_optimizer.step()
 
-                if i % 30 == 0:
-                    print(f"Loss: {loss:.5e}")
-
-
+        print("Preconditioning divergence...")
+        for i in tqdm.tqdm(range(epochs)):
+            for j in range(num_batch):
+                self.velocity_field.zero_grad()
+                self.pressure_field.zero_grad()
+                
+                loss = nff_ops.divergence_free_loss(
+                        pts[j*batch_size:(j+1)*batch_size], 
+                        self.velocity_field) 
+                loss = loss.mean()
+                loss.backward()
+                self.precondition_optimizer.step()
+        
+        initial_velocity = self.velocity_field.sample(pts).detach()
+        
+        print("Preconditioning Euler...")
+        for i in tqdm.tqdm(range(epochs)):
+            for j in range(num_batch):
+                self.velocity_field.zero_grad()
+                self.pressure_field.zero_grad()
+                
+                loss = nff_ops.euler_loss(
+                        pts[j*batch_size:(j+1)*batch_size], 
+                        self.velocity_field,
+                        self.pressure_field, self.timestep,
+                        initial_velocity=initial_velocity[j*batch_size:(j+1)*batch_size]) 
+                loss = loss.mean()
+                loss.backward()
+                self.precondition_optimizer.step()
+        """
     def render(self, coords):
+        
+        self.optimizer = optim.Adam([
+        #self.optimizer = optim.SGD([
+            {"params": self.velocity_field.parameters(), "lr":self.lr},
+            {"params": self.pressure_field.parameters(), "lr":self.lr},
+        ])
         
         if self.mode == "stable_fluids":
             # Add external forces
@@ -367,22 +416,20 @@ class InteractiveApp(sys.modules[backend].Window):
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-        if self.divergence_optim:
-            for i in range(1):
-                self.velocity_field.zero_grad()
-                pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
-                div = nff_ops.divergence(pts, self.velocity_field, method='finitediff')**2
-                div.mean().backward()
-                self.divergence_optimizer.step()
-
-        elif self.navier_optim:
-            for i in range(2):
+        elif self.optim_switch:
+            for i in range(3):
                 self.pressure_field.zero_grad()
                 self.velocity_field.zero_grad()
-                pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
-                loss = nff_ops.navier_stokes_loss(pts, self.velocity_field, self.pressure_field, self.timestep)
+                #pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
+                pts = torch.rand([2048, 2], device=coords.device) * 2.0 - 1.0
+                if self.optim_mode == "divergence-free":
+                    loss = nff_ops.divergence(pts, self.velocity_field)
+                elif self.optim_mode == "split":
+                    break
+                elif self.optim_mode == "euler":
+                    loss = nff_ops.euler_loss(pts, self.velocity_field, self.pressure_field, self.timestep)
                 loss.mean().backward()
-                self.navier_optimizer.step()
+                self.optimizer.step()
     
 
         with torch.no_grad():
@@ -401,7 +448,8 @@ class InteractiveApp(sys.modules[backend].Window):
                 #return div / self.max_error
                 return div / err
             elif self.display_mode == "navier-stokes":
-                loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+                #loss = nff_ops.navier_stokes_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+                loss = nff_ops.euler_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
                 err = loss.max()
                 self.curr_error = err
                 self.max_error = max(err, self.max_error)
