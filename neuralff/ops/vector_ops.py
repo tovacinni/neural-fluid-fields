@@ -21,7 +21,7 @@
 
 import torch
 
-def gradient(u, f, method='finitediff', eps=1e-7):
+def gradient(u, f, method='finitediff', eps=1e-4):
     """Compute the gradient of the scalar field `f` with respect to the input `u`.
 
     Args:
@@ -55,7 +55,7 @@ def gradient(u, f, method='finitediff', eps=1e-7):
 
     return grad
 
-def jacobian(u, f, method='finitediff', eps=1e-7):
+def jacobian(u, f, method='finitediff', eps=1e-4):
     """Compute the Jacobian of the vector field `f` with respect to the input `u`. 
 
     Args:
@@ -88,7 +88,7 @@ def jacobian(u, f, method='finitediff', eps=1e-7):
         raise NotImplementedError
     return j
 
-def divergence(u, f, method='finitediff', eps=1e-7):
+def divergence(u, f, method='finitediff', eps=1e-4):
     """Compute the divergence of the vector field `f` with respect to the input `u`.
 
     Args:
@@ -113,7 +113,7 @@ def divergence(u, f, method='finitediff', eps=1e-7):
         dfyuy = f(u + eps_y)[...,1:2] - f(u - eps_y)[...,1:2]
         return (dfxux + dfyuy)/(eps*2.0)
 
-def curl(u, f, method='finitediff', eps=1e-7):
+def curl(u, f, method='finitediff', eps=1e-4):
     """Compute the curl of the vector field `f` with respect to the input `u`.
 
     Args:
@@ -136,7 +136,7 @@ def curl(u, f, method='finitediff', eps=1e-7):
         dfxuy = f(u + eps_y)[...,0:1] - f(u - eps_y)[...,0:1]
         return (dfyux+dfxuy)/(eps*2.0)
 
-def laplacian(u, f, method='finitediff', eps=1e-7):
+def laplacian(u, f, method='finitediff', eps=1e-4):
     """Compute the Laplacian of the vector field `f` with respect to the input `u`.
 
     Note: the Laplacian of a vector field is just the vector of Laplacians of its components.
@@ -156,6 +156,8 @@ def laplacian(u, f, method='finitediff', eps=1e-7):
         raise NotImplementedError
     if method == 'finitediff':
         fu = 2.0 * f(u)
+        eps_x = torch.tensor([eps, 0.0], device=u.device)
+        eps_y = torch.tensor([0.0, eps], device=u.device)
         dfux = f(u + eps_x) - fu + f(u - eps_x)
         dfuy = f(u + eps_y) - fu + f(u - eps_y)
         return (dfux + dfuy) / (eps**2.0)

@@ -22,7 +22,7 @@
 import torch
 from .vector_ops import divergence, laplacian, gradient
 
-def navier_stokes_loss(coords, velocity_field, pressure_field, timestep, rho=1.0, nu=1.0):
+def navier_stokes_loss(coords, velocity_field, pressure_field, timestep, rho=1.0, nu=1.0, eps=1e-3):
     """Computes the Navier Stokes equation loss.
 
     We use the following definition of the Navier-Stokes equation (from Bridson):
@@ -37,25 +37,27 @@ def navier_stokes_loss(coords, velocity_field, pressure_field, timestep, rho=1.0
         timestep (float) : delta t of the simulation
         rho (float) : the fluid density (kg/m^d)
         nu (float) : kinematic viscosity
+        eps (float) : the "grid spacing" for finite diff
 
     Returns:
         (torch.Tensor) : per-point loss of the Navier-Stokes equation of shape [N, 1]
     """
     u = velocity_field.sample(coords)
 
-    div_u = divergence(coords, velocity_field)
+    div_u = divergence(coords, velocity_field, eps=eps)
 
     dudt = (u - u.detach()) / timestep
 
-    grad_p = (1.0/rho) * gradient(coords, pressure_field)
+    grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
     
     g = torch.zeros_like(coords)
     g[...,1] = -9.8 * timestep
 
-    diff = nu * laplacian(coords, velocity_field)
-
-    return g + diff - dudt - div_u * u - grad_p + div_u
-
+    diff = nu * laplacian(coords, velocity_field, eps=eps)
+    
+    momentum_term = ((g + diff - dudt - div_u * u - grad_p)**2).sum(-1, keepdim=True)
+    divergence_term = (div_u**2).sum(-1, keepdim=True)
+    return momentum_term + divergence_term
 
 
 
