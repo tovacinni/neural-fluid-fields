@@ -236,6 +236,8 @@ class InteractiveApp(sys.modules[backend].Window):
         elif symbol == 74:
             self.display_mode_idx = (self.display_mode_idx - 1) % len(self.display_modes)
             self.display_mode = self.display_modes[self.display_mode_idx]
+        elif symbol == 81:
+            self.close()
 
     def init_state(self):
 
