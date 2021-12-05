@@ -21,4 +21,5 @@
 
 from .fluid_ops import *
 from .grid_ops import *
+from .vector_ops import *
 

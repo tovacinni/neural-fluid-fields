@@ -184,6 +184,10 @@ class InteractiveApp(sys.modules[backend].Window):
         #self.mode = "stable_fluids"
         self.mode = "neuralff"
 
+        self.display_modes = ["rgb", "velocity", "divergence"]
+        self.display_mode = self.display_modes[1]
+        self.display_mode_idx = 0
+
     def on_draw(self, dt):
         self.set_title(str(self.fps).encode("ascii"))
         tex = self.screen['tex']
@@ -194,7 +198,11 @@ class InteractiveApp(sys.modules[backend].Window):
 
         coords = nff_ops.normalized_grid_coords(*self.render_res)
 
-        state[...,:3] = self.render(coords)
+        out = self.render(coords)
+
+        write_dim = out.shape[-1]
+
+        state[...,:write_dim] = out
         state[...,3] = 1
         state = torch.flip(state, [0])
 
@@ -265,9 +273,17 @@ class InteractiveApp(sys.modules[backend].Window):
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-        self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
-        return self.rgb
-
+        
+        if self.display_mode == "rgb": 
+            self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
+            return self.rgb
+        elif self.display_mode == "velocity":
+            return (1.0 + F.normalize(self.velocity_field.sample(self.image_coords), dim=-1)) / 2.0
+        elif self.display_mode == "divergence":
+            div = torch.abs(nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff'))
+            return div / div.max()
+        else:
+            raise NotImplementedError
 
 if __name__=='__main__':
     app.use('glfw')
