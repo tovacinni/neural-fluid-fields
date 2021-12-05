@@ -185,7 +185,7 @@ class InteractiveApp(sys.modules[backend].Window):
         self.mode = "neuralff"
 
         self.display_modes = ["rgb", "velocity", "divergence"]
-        self.display_mode = self.display_modes[1]
+        self.display_mode = self.display_modes[0]
         self.display_mode_idx = 0
 
     def on_draw(self, dt):
@@ -228,6 +228,14 @@ class InteractiveApp(sys.modules[backend].Window):
     ####################################
     # Application specific code
     ####################################
+    
+    def on_key_press(self, symbol, modifiers):
+        if symbol == 75:
+            self.display_mode_idx = (self.display_mode_idx + 1) % len(self.display_modes)
+            self.display_mode = self.display_modes[self.display_mode_idx]
+        elif symbol == 74:
+            self.display_mode_idx = (self.display_mode_idx - 1) % len(self.display_modes)
+            self.display_mode = self.display_modes[self.display_mode_idx]
 
     def init_state(self):
 
@@ -273,7 +281,6 @@ class InteractiveApp(sys.modules[backend].Window):
             # Remove divergence
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
-        
         if self.display_mode == "rgb": 
             self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
             return self.rgb
