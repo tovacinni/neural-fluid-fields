@@ -29,7 +29,7 @@ class BasicNetwork(nn.Module):
         output_dim = 2, 
         activation = torch.sin, 
         bias = True, 
-        num_layers = 4, 
+        num_layers = 1, 
         hidden_dim = 32):
         
         super().__init__()

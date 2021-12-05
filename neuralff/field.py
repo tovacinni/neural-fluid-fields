@@ -23,8 +23,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .ops import sample_from_grid
-from .model import BasicNetwork
+from neuralff.ops import sample_from_grid
+from neuralff.model import BasicNetwork
 
 class BaseField(nn.Module):
     def sample(coords):
