@@ -41,9 +41,9 @@ class RegularVectorField(BaseField):
         return sample_from_grid(coords, self.vector_field)
 
 class NeuralField(BaseField):
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.vector_field = BasicNetwork()
+        self.vector_field = BasicNetwork(**kwargs)
 
     def sample(self, coords):
         vector = self.vector_field(coords*100)

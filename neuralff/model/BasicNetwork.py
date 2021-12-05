@@ -27,13 +27,15 @@ class BasicNetwork(nn.Module):
     def __init__(self, 
         input_dim = 2, 
         output_dim = 2, 
-        activation = torch.sin, 
+        hidden_activation = torch.sin, 
+        output_activation = torch.tanh, 
         bias = True, 
-        num_layers = 1, 
+        num_layers = 5, 
         hidden_dim = 32):
         
         super().__init__()
-        self.activation = activation
+        self.hidden_activation = hidden_activation
+        self.output_activation = output_activation
         layers = []
         for i in range(num_layers):
             if i == 0:
@@ -46,7 +48,7 @@ class BasicNetwork(nn.Module):
     def forward(self, x):
         h = x
         for i, l in enumerate(self.layers):
-            h = self.activation(l(h))
-        out = torch.tanh(self.lout(h))
+            h = self.hidden_activation(l(h))
+        out = self.output_activation(self.lout(h))
         return out
 
