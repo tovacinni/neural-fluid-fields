@@ -201,15 +201,17 @@ class InteractiveApp(sys.modules[backend].Window):
         self.optim_mode_idx = 0
         self.optim_mode = self.optim_modes[self.optim_mode_idx]
 
-        self.max_error = 0.0
+        self.max_euler_error = 0.0
+        self.max_divergence_error = 0.0
         self.curr_error = 0.0
         self.optim_switch = False
+        self.begin_switch = False
 
     def on_draw(self, dt):
         title = f"FPS: {self.fps:.3f}"
         title += f"  Buffer: {self.display_mode}"
         
-        if self.display_mode == "divergence" or self.display_mode == "navier-stokes":
+        if self.display_mode == "divergence" or self.display_mode == "euler":
             title += f"  Error: {self.curr_error:.3e}"
         
         title += f"  Optimizing: {self.optim_mode}"
@@ -271,14 +273,17 @@ class InteractiveApp(sys.modules[backend].Window):
         elif symbol == 72: # h
             self.optim_mode_idx = (self.optim_mode_idx - 1) % len(self.optim_modes)
             self.optim_mode = self.optim_modes[self.optim_mode_idx]
+        elif symbol == 66: # b
+            self.begin_switch = not self.begin_switch
 
     def init_state(self):
 
         #self.gravity = 1e-4
         #self.timestep = 1e-1
-        self.timestep = 5e-2
+        #self.timestep = 5e-2
         #self.timestep = 1e-5
-        
+        self.timestep = 5e-3
+
         self.image_coords = nff_ops.normalized_grid_coords(self.height, self.width, aspect=False, device="cuda")
         self.image_coords[...,1] *= -1
 
@@ -311,7 +316,7 @@ class InteractiveApp(sys.modules[backend].Window):
                 "output_activation" : None,
                 "bias" : True,    
                 "num_layers" : 4,    
-                "hidden_dim" : 32,    
+                "hidden_dim" : 64,    
             }
             
             self.velocity_field = neuralff.NeuralField(**velocity_field_config).cuda()
@@ -332,6 +337,9 @@ class InteractiveApp(sys.modules[backend].Window):
             #self.pressure_field.requires_grad_(False)
             #self.pressure_field.eval()
             
+            self.rho_field = neuralff.ImageDensityField(self.height, self.width)
+            self.rho_field.update(self.rgb)
+
             #self.pc_lr = 5e-4
             self.pc_lr = 1e-4
             self.precondition_optimizer = optim.Adam([
@@ -405,8 +413,8 @@ class InteractiveApp(sys.modules[backend].Window):
         
         self.optimizer = optim.Adam([
         #self.optimizer = optim.SGD([
-            {"params": self.velocity_field.parameters(), "lr":self.lr},
-            {"params": self.pressure_field.parameters(), "lr":self.lr},
+            {"params": self.velocity_field.parameters(), "lr":self.lr*10},
+            {"params": self.pressure_field.parameters(), "lr":self.lr*10},
         ])
         
         if self.mode == "stable_fluids":
@@ -417,25 +425,28 @@ class InteractiveApp(sys.modules[backend].Window):
             #self.velocities = remove_divergence(self.velocities, self.x_mapper, self.y_mapper)
 
         elif self.optim_switch:
-            for i in range(3):
+            for i in range(6):
                 self.pressure_field.zero_grad()
                 self.velocity_field.zero_grad()
                 #pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
-                pts = torch.rand([2048, 2], device=coords.device) * 2.0 - 1.0
+                pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
                 if self.optim_mode == "divergence-free":
                     loss = nff_ops.divergence(pts, self.velocity_field)
                 elif self.optim_mode == "split":
                     break
                 elif self.optim_mode == "euler":
-                    loss = nff_ops.euler_loss(pts, self.velocity_field, self.pressure_field, self.timestep)
+                    loss = nff_ops.euler_loss(pts, self.velocity_field, 
+                            self.pressure_field, self.rho_field, self.timestep)
                 loss.mean().backward()
                 self.optimizer.step()
     
 
         with torch.no_grad():
             if self.display_mode == "rgb": 
-                self.rgb = nff_ops.semi_lagrangian_advection(self.image_coords, self.rgb, self.velocity_field, self.timestep)
-                return self.rgb
+                if self.begin_switch:
+                    self.rho_field.update(nff_ops.semi_lagrangian_advection(
+                        self.image_coords, self.rho_field.vector_field, self.velocity_field, self.timestep))    
+                return self.rho_field.vector_field
             elif self.display_mode == "pressure":
                 return (1.0 + self.pressure_field.sample(self.image_coords)) / 2.0
             elif self.display_mode == "velocity":
@@ -444,15 +455,16 @@ class InteractiveApp(sys.modules[backend].Window):
                 div = nff_ops.divergence(self.image_coords, self.velocity_field, method='finitediff')**2
                 err = div.max()
                 self.curr_error = err
-                self.max_error = max(err, self.max_error)
-                #return div / self.max_error
-                return div / err
+                self.max_divergence_error = max(err, self.max_divergence_error)
+                return div / self.max_divergence_error
+                #return div / err
             elif self.display_mode == "euler":
-                loss = nff_ops.euler_loss(self.image_coords, self.velocity_field, self.pressure_field, self.timestep)
+                loss = nff_ops.euler_loss(self.image_coords, self.velocity_field, 
+                        self.pressure_field, self.rho_field, self.timestep)
                 err = loss.max()
                 self.curr_error = err
-                self.max_error = max(err, self.max_error)
-                return loss / self.max_error
+                self.max_euler_error = max(err, self.max_euler_error)
+                return loss / self.max_euler_error
             else:
                 return torch.zeros_like(coords)
 

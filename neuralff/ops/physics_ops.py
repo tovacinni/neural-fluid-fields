@@ -143,7 +143,7 @@ def body_forces_loss(coords, velocity_field, timestep, eps=1e-3, initial_velocit
     g = gravity(coords, timestep)
     return ((g - dudt)**2.0).sum(-1, keepdim=True)
 
-def incompressibility_loss(coords, pressure_field, timestep, eps=1e-3, rho=1e-3, initial_velocity=None):
+def incompressibility_loss(coords, pressure_field, timestep, rho_field, eps=1e-3, initial_velocity=None):
     """Computes the incompressibility equation loss.
 
     We use the following definition (from Bridson)
@@ -154,6 +154,7 @@ def incompressibility_loss(coords, pressure_field, timestep, eps=1e-3, rho=1e-3,
     Args:
         coords (torch.Tensor) : coordinates of shape [N, D]
         pressure_field (neuralff.Field) : pressure field function (aka p)
+        rho_field (neuralff.Field) : the fluid density field (kg/m^d)
         timestep (float) : delta t of the simulation
         eps (float) : the "grid spacing" for finite diff
         initial_velocity (torch.Tensor) : if provided, will use this instead of sampling the initial velocity.
@@ -164,12 +165,13 @@ def incompressibility_loss(coords, pressure_field, timestep, eps=1e-3, rho=1e-3,
     """
     dudt, u = time_derivative(coords, velocity_field, timestep, initial_velocity=initial_velocity)
     div_u = divergence(coords, velocity_field, eps=eps)
+    rho = rho_field.sample(coords)
     grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
     return ((grad_p - dudt)**2.0).sum(-1, keepdim=True) + (div_u**2.0).sum(-1, keepdim=True)
 
 def euler_loss(
-        coords, velocity_field, pressure_field, 
-        timestep, rho=1e-1, eps=1e-3, initial_velocity=None):
+        coords, velocity_field, pressure_field, rho_field,
+        timestep, eps=1e-4, initial_velocity=None):
     """Computes the incompressible Euler equation loss.
 
     We use the following definition of the Euler equation (from Bridson):
@@ -183,8 +185,8 @@ def euler_loss(
         coords (torch.Tensor) : coordinates to enforce Navier-Stokes of shape [N, D]
         velocity_field (neuralff.Field) : velocity field function (aka u)
         pressure_field (neuralff.Field) : pressure field function (aka p)
-        timestep (float) : delta t of the simulation
         rho_field (neuralff.Field) : the fluid density field (kg/m^d)
+        timestep (float) : delta t of the simulation
         eps (float) : the "grid spacing" for finite diff
         initial_velocity (torch.Tensor) : if provided, will use this instead of sampling the initial velocity.
                                           This is useful for preconditioning the velocity field.
@@ -194,6 +196,7 @@ def euler_loss(
     """
     mat_d, div_u = material_derivative(coords, velocity_field, timestep, eps=eps, initial_velocity=initial_velocity)
 
+    rho = rho_field.sample(coords) 
     grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
     
     g = gravity(coords, timestep)
@@ -203,8 +206,8 @@ def euler_loss(
     return momentum_term + divergence_term
 
 def navier_stokes_loss(
-        coords, velocity_field, pressure_field, 
-        timestep, rho=1e-0, nu=1e-5, eps=1e-3, initial_velocity=None):
+        coords, velocity_field, pressure_field, rho_field,
+        timestep, nu=1e-5, eps=1e-3, initial_velocity=None):
     """Computes the Navier Stokes equation loss.
 
     We use the following definition of the Navier-Stokes equation (from Bridson):
@@ -216,8 +219,8 @@ def navier_stokes_loss(
         coords (torch.Tensor) : coordinates to enforce Navier-Stokes of shape [N, D]
         velocity_field (neuralff.Field) : velocity field function (aka u)
         pressure_field (neuralff.Field) : pressure field function (aka p)
+        rho_field (neuralff.Field) : the fluid density field (kg/m^d)
         timestep (float) : delta t of the simulation
-        rho (neuralff.Field) : the fluid density field (kg/m^d)
         nu (float) : kinematic viscosity
         eps (float) : the "grid spacing" for finite diff
         initial_velocity (torch.Tensor) : if provided, will use this instead of sampling the initial velocity.
@@ -228,6 +231,7 @@ def navier_stokes_loss(
     """
     mat_d, div_u = material_derivative(coords, velocity_field, timestep, eps=eps, initial_velocity=initial_velocity)
 
+    rho = rho_field.sample(coords)
     grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
     
     g = gravity(coords, timestep)
