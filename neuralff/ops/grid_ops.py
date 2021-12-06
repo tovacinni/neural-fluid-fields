@@ -39,7 +39,7 @@ def normalized_grid_coords(height, width, aspect=True, device="cuda"):
     coord = torch.stack(torch.meshgrid(window_x, window_y, indexing='ij')).permute(2,1,0)
     return coord
 
-def sample_from_grid(coords, grid, padding_mode="zeros"):
+def sample_from_grid(coords, grid, padding_mode="reflection"):
     """Sample from a discrete grid at continuous coordinates.
 
     Args:

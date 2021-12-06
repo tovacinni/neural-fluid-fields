@@ -34,9 +34,9 @@ class BaseField(nn.Module):
 
 
 class RegularVectorField(BaseField):
-    def __init__(self, height, width):
+    def __init__(self, height, width, fdim=2):
         super().__init__()
-        self.vector_field = nn.Parameter(torch.zeros([height, width, 2]))
+        self.vector_field = nn.Parameter(torch.randn([height, width, fdim]))
 
     def sample(self, coords):
         shape = coords.shape
@@ -50,7 +50,7 @@ class RegularVectorField(BaseField):
 class ImageDensityField(RegularVectorField):
     def sample(self, coords):
         alpha = 3.0 - super().sample(coords).sum(-1, keepdim=True)
-        return alpha + 1e-1
+        return (alpha + 1e-1) * 255
 
 class NeuralField(BaseField):
     def __init__(self, **kwargs):
@@ -61,4 +61,18 @@ class NeuralField(BaseField):
         vector = self.vector_field(coords*100)
         #vector[torch.abs(coords) >= 1.0] = 0
         return vector
+
+class RegularNeuralField(BaseField):
+    def __init__(self, height, width, fdim, **kwargs):
+        super().__init__()
+        self.vector_field = BasicNetwork(**kwargs)
+        self.feature_field = nn.Parameter(torch.randn([height, width, fdim]))
+    
+    def sample(self, coords):
+        shape = coords.shape
+        features = sample_from_grid(coords.reshape(-1, shape[-1]), self.feature_field)
+        feature_dim = features.shape[-1]
+        features = features.reshape(*shape[:-1], feature_dim)
+        return self.vector_field(features)
+
 

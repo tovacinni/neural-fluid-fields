@@ -143,7 +143,7 @@ def body_forces_loss(coords, velocity_field, timestep, eps=1e-3, initial_velocit
     g = gravity(coords, timestep)
     return ((g - dudt)**2.0).sum(-1, keepdim=True)
 
-def incompressibility_loss(coords, pressure_field, timestep, rho_field, eps=1e-3, initial_velocity=None):
+def incompressibility_loss(coords, velocity_field, pressure_field, rho_field, timestep, eps=1e-3, initial_velocity=None):
     """Computes the incompressibility equation loss.
 
     We use the following definition (from Bridson)
@@ -167,11 +167,11 @@ def incompressibility_loss(coords, pressure_field, timestep, rho_field, eps=1e-3
     div_u = divergence(coords, velocity_field, eps=eps)
     rho = rho_field.sample(coords)
     grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
-    return ((grad_p - dudt)**2.0).sum(-1, keepdim=True) + (div_u**2.0).sum(-1, keepdim=True)
+    return ((grad_p - dudt)**2.0).sum(-1, keepdim=True) + 100.0 * (div_u**2.0).sum(-1, keepdim=True)
 
 def euler_loss(
         coords, velocity_field, pressure_field, rho_field,
-        timestep, eps=1e-4, initial_velocity=None):
+        timestep, eps=1e-6, initial_velocity=None):
     """Computes the incompressible Euler equation loss.
 
     We use the following definition of the Euler equation (from Bridson):
@@ -197,13 +197,15 @@ def euler_loss(
     mat_d, div_u = material_derivative(coords, velocity_field, timestep, eps=eps, initial_velocity=initial_velocity)
 
     rho = rho_field.sample(coords) 
-    grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
+    #grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
+    grad_p = gradient(coords, pressure_field, eps=eps)
     
     g = gravity(coords, timestep)
     
-    momentum_term = ((g - mat_d - grad_p)**2).sum(-1, keepdim=True)
+    #momentum_term = ((g - mat_d - grad_p)**2).sum(-1, keepdim=True)
+    momentum_term = ((rho * mat_d + grad_p - rho * g)**2).sum(-1, keepdim=True)
     divergence_term = (div_u**2).sum(-1, keepdim=True)
-    return momentum_term + divergence_term
+    return momentum_term + 100.0 * divergence_term
 
 def navier_stokes_loss(
         coords, velocity_field, pressure_field, rho_field,
