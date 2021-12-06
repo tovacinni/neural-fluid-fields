@@ -32,13 +32,25 @@ class BaseField(nn.Module):
     def forward(self, coords):
         return self.sample(coords)
 
+
 class RegularVectorField(BaseField):
     def __init__(self, height, width):
         super().__init__()
         self.vector_field = nn.Parameter(torch.zeros([height, width, 2]))
 
     def sample(self, coords):
-        return sample_from_grid(coords, self.vector_field)
+        shape = coords.shape
+        samples = sample_from_grid(coords.reshape(-1, shape[-1]), self.vector_field)
+        sample_dim = samples.shape[-1]
+        return samples.reshape(*shape[:-1], sample_dim)
+    
+    def update(self, vector_field):
+        self.vector_field = nn.Parameter(vector_field)
+
+class ImageDensityField(RegularVectorField):
+    def sample(self, coords):
+        alpha = 3.0 - super().sample(coords).sum(-1, keepdim=True)
+        return alpha + 1e-1
 
 class NeuralField(BaseField):
     def __init__(self, **kwargs):
