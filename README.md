@@ -1,5 +1,7 @@
 # Neural Fluid Fields
 
+![](media/demo.gif)
+
 This is a small library for doing fluid simulation with neural fields. 
 Check out our review paper, [Neural Fields in Visual Computing and Beyond](https://neuralfields.cs.brown.edu/)
 if you want to learn more about neural fields!
