@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Takikawa"
+  given-names: "Towaki"
+  orcid: "https://orcid.org/0000-0003-2019-1564"
+- family-names: "Mozaffari"
+  given-names: "Mohammad"
+  orcid: "https://orcid.org/0000-0000-0000-0000"
+title: "Neural Fluid Fields"
+version: 1.0.0
+date-released: 2021-12-07
+url: "https://github.com/tovacinni/neural-fluid-fields"

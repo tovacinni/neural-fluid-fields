@@ -166,8 +166,8 @@ def incompressibility_loss(coords, velocity_field, pressure_field, rho_field, ti
     dudt, u = time_derivative(coords, velocity_field, timestep, initial_velocity=initial_velocity)
     div_u = divergence(coords, velocity_field, eps=eps)
     rho = rho_field.sample(coords)
-    grad_p = (1.0/rho) * gradient(coords, pressure_field, eps=eps)
-    return ((grad_p - dudt)**2.0).sum(-1, keepdim=True) + 100.0 * (div_u**2.0).sum(-1, keepdim=True)
+    grad_p = gradient(coords, pressure_field, eps=eps)
+    return ((rho * dudt - grad_p)**2.0).sum(-1, keepdim=True) + 100.0 * (div_u**2.0).sum(-1, keepdim=True)
 
 def euler_loss(
         coords, velocity_field, pressure_field, rho_field,
