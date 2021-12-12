@@ -49,6 +49,8 @@ import imageio
 
 import tqdm
 
+import argparse
+
 def load_rgb(path):
     img = imageio.imread(path)
     img = skimage.img_as_float32(img)
@@ -79,52 +81,6 @@ def create_shared_texture(w, h, c=4,
 backend = "glumpy.app.window.backends.backend_glfw"
 importlib.import_module(backend)
 
-def grad_mat_generator(n):
-    mat_size = (n - 1) * n
-    result = np.zeros(mat_size)
-    result[range(0, mat_size, n + 1)] = -1
-    result[range(1, mat_size, n + 1)] = 1
-    result = result.reshape([n - 1, n])
-    return sparse.csr_matrix(result)
-
-def laplacian_mat_generator(n):
-    mat_size = (n - 1) * (n - 1)
-    result = np.zeros(mat_size)
-    result[range(0, mat_size, n)] = 2
-    result[range(1, mat_size, n)] = -1
-    result[range(n - 1, mat_size, n)] = -1
-    result = result.reshape([n - 1, n - 1])
-    return sparse.csr_matrix(result)
-
-def interpolator_generator(n):
-    mat_size = (n - 1) * n
-    result = np.zeros(mat_size)
-    result[range(0, mat_size, n + 1)] = 0.5
-    result[range(1, mat_size, n + 1)] = 0.5
-    result = result.reshape([n - 1, n])
-    return sparse.csr_matrix(result)
-
-def remove_divergence(v, x_mapper, y_mapper):
-    # v = v_divergence_free + grad(w)
-    # div(v) = laplacian(w)
-    # w = laplacian \ div(v)
-
-    # Map velocities from nodes to edges
-    vx = y_mapper.dot(v[:,:,0].ravel()).reshape(self.width, self.height - 1)
-    vy = x_mapper.dot(v[:,:,1].ravel()).reshape(self.width - 1, self.height)
-
-    # Compute grad(w)
-    divergence = x_gradient.dot(vx.ravel()) + y_gradient.dot(vy.ravel())
-    w = factorized_laplacian(divergence.ravel())
-    grad_w_x = x_gradient.T.dot(w).reshape(self.width, self.height - 1).ravel()
-    grad_w_y = y_gradient.T.dot(w).reshape(self.width - 1, self.height).ravel()
-
-    # Make the velocity divergence-free and map it back from edges to nodes
-    v[:,:,0] -= y_mapper.T.dot(grad_w_x).reshape(self.width, self.height)
-    v[:,:,1] -= x_mapper.T.dot(grad_w_y).reshape(self.width, self.height)
-
-    return v
-
 def load_rgb(path):
     img = imageio.imread(path)
     img = skimage.img_as_float32(img)
@@ -139,9 +95,10 @@ class InteractiveApp(sys.modules[backend].Window):
 
     #def __init__(self, render_res=[720, 1024]):
     #def __init__(self, render_res=[100, 200]):
-    def __init__(self):
+    def __init__(self, args):
         
-        self.rgb = torch.from_numpy(load_rgb("data/kirby.jpg")).cuda()
+        self.args = args
+        self.rgb = torch.from_numpy(load_rgb(self.args.image_path)).cuda()
         render_res = self.rgb.shape[:2]
         self.render_res = render_res
 
@@ -293,22 +250,6 @@ class InteractiveApp(sys.modules[backend].Window):
         if self.mode == "stable_fluids":
             self.grid_width = self.width // 8
             self.grid_height = self.height // 8
-            
-            # Operator Initialization
-            # For mapping the velocities from nodes to edges and vice versa
-            self.y_mapper = sparse.kron(sparse.identity(self.grid_width), interpolator_generator(self.grid_height))
-            self.x_mapper = sparse.kron(interpolator_generator(self.grid_width), sparse.identity(self.grid_height))
-            # For Computing gradient, divergence, and Laplacian
-            self.x_gradient = sparse.kron(grad_mat_generator(self.grid_width), 
-                                          sparse.identity(self.grid_height - 1))
-            self.y_gradient = sparse.kron(sparse.identity(self.grid_width - 1), 
-                                          grad_mat_generator(self.grid_height))
-            self.laplacian = sparse.kronsum(laplacian_mat_generator(self.grid_height),
-                                            laplacian_mat_generator(self.grid_width))
-            # Prefactorize the Laplacian matrix for better performance
-            self.factorized_laplacian = linalg.factorized(self.laplacian)
-            self.velocity_field = neuralff.RegularVectorField(self.grid_height, self.grid_width).cuda()
-            self.velocity_field.requires_grad_(False)
 
         elif self.mode == "neuralff":
             
@@ -348,23 +289,21 @@ class InteractiveApp(sys.modules[backend].Window):
             self.rho_field = neuralff.ImageDensityField(self.height, self.width)
             self.rho_field.update(self.rgb)
 
-            #self.pc_lr = 5e-4
-            self.pc_lr = 1e-4
+            self.pc_lr = self.args.pc_lr
             self.precondition_optimizer = optim.Adam([
                 {"params": self.velocity_field.parameters(), "lr":self.pc_lr},
                 {"params": self.pressure_field.parameters(), "lr":self.pc_lr},
             ])
 
-            #self.lr = 1e-4
-            #self.lr = 1e-4
-            self.lr = 1e-5
+            self.lr = self.args.lr
             self.optimizer = optim.Adam([
             #self.optimizer = optim.SGD([
                 {"params": self.velocity_field.parameters(), "lr":self.lr},
                 {"params": self.pressure_field.parameters(), "lr":self.lr},
             ])
-
-            self.precondition()
+            
+            if self.args.precondition:
+                self.precondition()
 
     def precondition(self):
 
@@ -374,7 +313,6 @@ class InteractiveApp(sys.modules[backend].Window):
         pts = torch.rand([batch_size*num_batch, 2], device='cuda') * 2.0 - 1.0
         
         initial_velocity = self.velocity_field.sample(pts).detach()
-        """
         print("Preconditioning body forces...")
         for i in tqdm.tqdm(range(epochs)):
             for j in range(num_batch):
@@ -418,7 +356,7 @@ class InteractiveApp(sys.modules[backend].Window):
                 loss = loss.mean()
                 loss.backward()
                 self.precondition_optimizer.step()
-        """
+    
     def render(self, coords):
         
         self.optimizer = optim.Adam([
@@ -484,9 +422,27 @@ class InteractiveApp(sys.modules[backend].Window):
             else:
                 return torch.zeros_like(coords)
 
+def parse_options():
+    parser = argparse.ArgumentParser(description='Fluid simulation with neural networks.')
+    
+    # Global arguments
+    global_group = parser.add_argument_group('global')
+    global_group.add_argument('--lr', type=float, default=1e-5,
+                              help='Learning rate for the simulation.')
+    global_group.add_argument('--pc_lr', type=float, default=1e-5,
+                              help='Learning rate for the preconditioner.')
+    global_group.add_argument('--precondition', action='store_true',
+                              help='Use the preconditioner.')
+    global_group.add_argument('--image_path', type=str, default="./data/test.png",
+                              help='Path to the image to use for the simulation.')
+
+    return parser.parse_args()
+
 if __name__=='__main__':
+    args = parse_options()
     app.use('glfw')
-    window = InteractiveApp()
+    window = InteractiveApp(args)
     window.init_state()
     app.run()
+
 
