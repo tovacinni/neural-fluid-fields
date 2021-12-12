@@ -264,10 +264,6 @@ class InteractiveApp(sys.modules[backend].Window):
             }
         
             self.velocity_field = neuralff.NeuralField(**velocity_field_config).cuda()
-            #self.velocity_field = neuralff.RegularNeuralField(128, 128, 2, **velocity_field_config).cuda()
-            #self.velocity_field = neuralff.RegularVectorField(128, 128).cuda()
-            #self.velocity_field.requires_grad_(False)
-            #self.velocity_field.eval()
 
             pressure_field_config = {
                 "input_dim" : 2,    
@@ -280,11 +276,6 @@ class InteractiveApp(sys.modules[backend].Window):
             }
 
             self.pressure_field = neuralff.NeuralField(**pressure_field_config).cuda()
-            #self.pressure_field = neuralff.RegularNeuralField(128, 128, 2, **pressure_field_config).cuda()
-            #self.pressure_field = neuralff.RegularVectorField(128, 128, fdim=1).cuda()
-
-            #self.pressure_field.requires_grad_(False)
-            #self.pressure_field.eval()
             
             self.rho_field = neuralff.ImageDensityField(self.height, self.width)
             self.rho_field.update(self.rgb)
@@ -307,9 +298,9 @@ class InteractiveApp(sys.modules[backend].Window):
 
     def precondition(self):
 
-        num_batch = 10
-        batch_size = 512
-        epochs = 400
+        num_batch = self.args.pc_num_batch
+        batch_size = self.args.pc_batch_size
+        epochs = self.args.pc_epochs
         pts = torch.rand([batch_size*num_batch, 2], device='cuda') * 2.0 - 1.0
         
         initial_velocity = self.velocity_field.sample(pts).detach()
@@ -351,7 +342,7 @@ class InteractiveApp(sys.modules[backend].Window):
                 loss = nff_ops.euler_loss(
                         pts[j*batch_size:(j+1)*batch_size], 
                         self.velocity_field,
-                        self.pressure_field, self.timestep,
+                        self.pressure_field, self.rho_field, self.timestep,
                         initial_velocity=initial_velocity[j*batch_size:(j+1)*batch_size]) 
                 loss = loss.mean()
                 loss.backward()
@@ -361,8 +352,8 @@ class InteractiveApp(sys.modules[backend].Window):
         
         self.optimizer = optim.Adam([
         #self.optimizer = optim.SGD([
-            {"params": self.velocity_field.parameters(), "lr":self.lr*10},
-            {"params": self.pressure_field.parameters(), "lr":self.lr*10},
+            {"params": self.velocity_field.parameters(), "lr":self.lr},
+            {"params": self.pressure_field.parameters(), "lr":self.lr},
         ])
         
         if self.mode == "stable_fluids":
@@ -376,8 +367,7 @@ class InteractiveApp(sys.modules[backend].Window):
             for i in range(6):
                 self.pressure_field.zero_grad()
                 self.velocity_field.zero_grad()
-                #pts = torch.rand([512, 2], device=coords.device) * 2.0 - 1.0
-                pts = torch.rand([4096, 2], device=coords.device) * 2.0 - 1.0
+                pts = torch.rand([self.args.batch_size, 2], device=coords.device) * 2.0 - 1.0
                 if self.optim_mode == "divergence-free":
                     loss = nff_ops.divergence_free_loss(pts, self.velocity_field)
                 elif self.optim_mode == "split":
@@ -427,10 +417,18 @@ def parse_options():
     
     # Global arguments
     global_group = parser.add_argument_group('global')
-    global_group.add_argument('--lr', type=float, default=1e-5,
+    global_group.add_argument('--lr', type=float, default=1e-6,
                               help='Learning rate for the simulation.')
-    global_group.add_argument('--pc_lr', type=float, default=1e-5,
+    global_group.add_argument('--batch_size', type=int, default=4096,
+                              help='Batch size for the simulation.')
+    global_group.add_argument('--pc_lr', type=float, default=1e-6,
                               help='Learning rate for the preconditioner.')
+    global_group.add_argument('--pc_batch_size', type=int, default=4096,
+                              help='Batch size for the preconditioner.')
+    global_group.add_argument('--pc_num_batch', type=int, default=10,
+                              help='Number of batches to use for the preconditioner.')
+    global_group.add_argument('--pc_epochs', type=int, default=100,
+                              help='Number of epochs to train the preconditioner for.')
     global_group.add_argument('--precondition', action='store_true',
                               help='Use the preconditioner.')
     global_group.add_argument('--image_path', type=str, default="./data/test.png",
