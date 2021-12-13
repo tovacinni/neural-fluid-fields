@@ -37,5 +37,6 @@ pip install glumpy
 ```
 
 To run the demo, simply run `python3 app/interactive_app.py`.
+To change the inital image of the animation, set an arbitrary image named `test.png` in `./data`.
 
 
